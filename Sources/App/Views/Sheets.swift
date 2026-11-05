@@ -103,7 +103,7 @@ struct NewReminderSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Add") { add() }
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.borderedProminent)
                     .disabled(busy || draft.title.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -215,6 +215,7 @@ struct SettingsView: View {
 struct MenuBarContent: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
+    @State private var quick = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -224,6 +225,19 @@ struct MenuBarContent: View {
                 if model.isSyncing { ProgressView().controlSize(.mini) }
                 Button { Task { await model.sync(reason: "menubar") } } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain).disabled(!model.isConnected)
+            }
+            if model.isConnected {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor)
+                    TextField("", text: $quick, prompt: Text("Quick add… (↩)")).textFieldStyle(.plain).onSubmit {
+                        let entry = QuickEntryParser.parse(quick, lists: model.snapshot.categories.map { .init(id: $0.id, name: $0.name) })
+                        guard !entry.title.isEmpty else { return }
+                        let typed = quick
+                        quick = ""
+                        Task { if !(await model.quickAdd(ReminderDraft(entry: entry))) { quick = typed } }
+                    }
+                }
+                .padding(8).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
             }
             let pending = model.snapshot.pending(limit: 8)
             if !model.isConnected {

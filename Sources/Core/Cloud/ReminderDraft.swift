@@ -135,3 +135,18 @@ public struct ReminderDraft: Hashable, Sendable {
         record["event_status"] = JSONValue(1)
     }
 }
+
+public extension ReminderDraft {
+    /// Builds a draft from a parsed quick entry.
+    init(entry: QuickEntry, defaultCategoryID: String = defaultCategoryID) {
+        self.init()
+        title = entry.title
+        favorite = entry.important
+        categoryID = entry.categoryID ?? defaultCategoryID
+        if let date = entry.date { schedule = entry.hasTime ? .timed(date) : .allDay(date) }
+        if let unit = entry.repeatUnit {
+            repeatRule = RepeatRule(unit: unit, byDay: entry.repeatByDay)
+            if schedule == .none { schedule = entry.hasTime ? .timed(Date()) : .allDay(Date()) }
+        }
+    }
+}

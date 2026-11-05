@@ -12,6 +12,26 @@ import os
 final class AppModel {
     enum Filter: Hashable {
         case all, today, upcoming, favorites, completed, category(String)
+
+        var storageKey: String {
+            switch self {
+            case .all: "all"; case .today: "today"; case .upcoming: "upcoming"; case .favorites: "favorites"
+            case .completed: "completed"; case .category(let id): "category:" + id
+            }
+        }
+
+        init?(storageKey: String) {
+            switch storageKey {
+            case "all": self = .all
+            case "today": self = .today
+            case "upcoming": self = .upcoming
+            case "favorites": self = .favorites
+            case "completed": self = .completed
+            default:
+                guard storageKey.hasPrefix("category:") else { return nil }
+                self = .category(String(storageKey.dropFirst("category:".count)))
+            }
+        }
     }
 
     private(set) var snapshot: ReminderSnapshot = .empty
@@ -22,7 +42,10 @@ final class AppModel {
     private(set) var lastError: String?
     private(set) var storeUnavailable = false
 
-    var filter: Filter = .all
+    /// Land on Today: the smallest actionable view, not the whole backlog.
+    var filter: Filter = .today {
+        didSet { UserDefaults.standard.set(filter == .today ? nil : filter.storageKey, forKey: Self.filterKey) }
+    }
     var searchText = ""
     var selectedReminderID: String?
     var showNewReminder = false
@@ -42,6 +65,7 @@ final class AppModel {
         }
     }
 
+    private static let filterKey = "lastFilter"
     private static let intervalKey = "refreshIntervalMinutes"
     private static let notificationsKey = "notificationsEnabled"
     private static let logger = Logger(subsystem: "SamsungReminder", category: "app")
@@ -56,6 +80,7 @@ final class AppModel {
         let interval = defaults.integer(forKey: Self.intervalKey)
         refreshIntervalMinutes = (1...120).contains(interval) ? interval : 5
         notificationsEnabled = defaults.object(forKey: Self.notificationsKey) as? Bool ?? true
+        if let saved = defaults.string(forKey: Self.filterKey), let restored = Filter(storageKey: saved) { filter = restored }
         if let store = SnapshotStore.shared() {
             service = ReminderService(store: store)
         } else {
@@ -174,8 +199,58 @@ final class AppModel {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
+    // MARK: Capture and completion feel
+
+    private(set) var pendingAdds = 0
+    /// Ids that stay visible briefly after being checked, so the check animation is seen.
+    private var lingering: Set<String> = []
+    struct Undo { let id: String; let title: String }
+    private(set) var undo: Undo?
+    private var undoTask: Task<Void, Never>?
+
+    func quickAdd(_ draft: ReminderDraft) async -> Bool {
+        pendingAdds += 1
+        defer { pendingAdds -= 1 }
+        return await run { _ = try await $0.create(draft) }
+    }
+
+    var quickAddHint: String {
+        switch filter {
+        case .today: "Add to today…"
+        case .upcoming: "Add for tomorrow…"
+        case .favorites: "Add something important…"
+        case .category(let id): "Add to \(categoryName(id))…"
+        default: "New reminder — try “call Ali tomorrow 15:00”"
+        }
+    }
+
     func toggleCompleted(_ reminder: Reminder) {
-        mutate { try await $0.setCompleted(reminder.id, !reminder.completed) }
+        let completing = !reminder.completed
+        if completing, filter != .completed {
+            lingering.insert(reminder.id)
+            undoTask?.cancel()
+            undo = Undo(id: reminder.id, title: reminder.title)
+            undoTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1.2))
+                guard let self, !Task.isCancelled else { return }
+                withAnimation(.snappy) { _ = self.lingering.remove(reminder.id) }
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                self.undo = nil
+            }
+        } else {
+            lingering.remove(reminder.id)
+            if undo?.id == reminder.id { undo = nil; undoTask?.cancel() }
+        }
+        mutate { try await $0.setCompleted(reminder.id, completing) }
+    }
+
+    func performUndo() {
+        guard let undo, let reminder = snapshot.reminders.first(where: { $0.id == undo.id }) else { return }
+        undoTask?.cancel()
+        self.undo = nil
+        lingering.remove(undo.id)
+        mutate { try await $0.setCompleted(reminder.id, false) }
     }
 
     func toggleFavorite(_ reminder: Reminder) {
@@ -274,6 +349,7 @@ final class AppModel {
         let now = Date()
         let needle = searchText.trimmingCharacters(in: .whitespaces)
         return snapshot.reminders.filter { reminder in
+            if lingering.contains(reminder.id) { return true }
             let passesFilter: Bool
             switch filter {
             case .all: passesFilter = !reminder.completed

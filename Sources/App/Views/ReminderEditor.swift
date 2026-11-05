@@ -10,6 +10,7 @@ struct ReminderEditor: View {
     @State private var newItem = ""
     @State private var showLocationPicker = false
     @FocusState private var newItemFocused: Bool
+    @FocusState private var titleFocused: Bool
 
     var body: some View {
         ScrollView {
@@ -17,6 +18,7 @@ struct ReminderEditor: View {
                 VStack(alignment: .leading, spacing: 6) {
                     TextField("", text: $draft.title, prompt: Text("Title"), axis: .vertical)
                         .textFieldStyle(.plain).font(.title.weight(.semibold)).lineLimit(1...3)
+                        .focused($titleFocused)
                     TextField("", text: $draft.text, prompt: Text("Notes"), axis: .vertical)
                         .textFieldStyle(.plain).foregroundStyle(.secondary).lineLimit(1...10)
                 }
@@ -58,6 +60,7 @@ struct ReminderEditor: View {
             .frame(maxWidth: 640, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .onAppear { if reminder == nil { titleFocused = true } }
         .sheet(isPresented: $showLocationPicker) {
             LocationPicker { place in
                 draft.location = ReminderLocation(latitude: place.latitude, longitude: place.longitude, address: place.address,

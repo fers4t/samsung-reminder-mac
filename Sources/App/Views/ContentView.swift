@@ -173,42 +173,97 @@ struct ReminderList: View {
     }
 }
 
-/// Apple-Reminders-style inline add: type, press Return, done. ⌘N still opens the full form.
+/// Capture in one line: type naturally ("rapor yarın 15:00 #iş !"), see what was understood as chips,
+/// press Return. The field clears at once and keeps focus so several thoughts can be dumped in a row.
 struct QuickAddBar: View {
     @Environment(AppModel.self) private var model
-    @State private var title = ""
-    @State private var busy = false
+    @State private var text = ""
+    @State private var ignored: Set<QuickEntry.ChipKind> = []
     @FocusState private var focused: Bool
 
+    private var entry: QuickEntry {
+        QuickEntryParser.parse(text, lists: model.snapshot.categories.map { .init(id: $0.id, name: $0.name) }, ignoring: ignored)
+    }
+
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor).font(.title3)
-            TextField("", text: $title, prompt: Text("New reminder"))
-                .textFieldStyle(.plain)
-                .focused($focused)
-                .onSubmit(add)
-                .disabled(busy)
-            if busy { ProgressView().controlSize(.small) }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor).font(.title3)
+                TextField("", text: $text, prompt: Text(model.quickAddHint))
+                    .textFieldStyle(.plain)
+                    .focused($focused)
+                    .onSubmit(add)
+                    .onExitCommand { text = ""; ignored = [] }
+                if model.pendingAdds > 0 { ProgressView().controlSize(.small) }
+            }
+            if !text.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(entry.chips, id: \.kind) { chip in
+                        EntryChip(chip: chip) { ignored.insert(chip.kind) }
+                    }
+                    if entry.chips.isEmpty {
+                        Text("Try “yarın 15:00”, “every monday”, “#list”, “!”").font(.caption).foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                    Text("↩ add").font(.caption).foregroundStyle(.tertiary)
+                }
+                .transition(.opacity)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+        .animation(.snappy(duration: 0.15), value: entry.chips)
+        .onChange(of: text) { _, new in if new.isEmpty { ignored = [] } }
+        .onAppear { focused = true }
     }
 
     private func add() {
-        let text = title.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty else { return }
-        var draft = ReminderDraft()
-        draft.title = text
-        if case .category(let id) = model.filter { draft.categoryID = id }
-        if model.filter == .today { draft.schedule = .allDay(Date()) }
-        if model.filter == .favorites { draft.favorite = true }
-        busy = true
-        Task {
-            if await model.create(draft) { title = "" }
-            busy = false
-            focused = true
+        let parsed = entry
+        guard !parsed.title.isEmpty else { return }
+        var draft = ReminderDraft(entry: parsed)
+        if parsed.categoryID == nil, case .category(let id) = model.filter { draft.categoryID = id }
+        if parsed.date == nil {
+            if model.filter == .today { draft.schedule = .allDay(Date()) }
+            if model.filter == .upcoming, let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date()) { draft.schedule = .allDay(tomorrow) }
         }
+        if model.filter == .favorites { draft.favorite = true }
+        let typed = text
+        text = ""
+        ignored = []
+        focused = true
+        Task {
+            // Optimistic: the field is already clear; bring the text back only if the cloud said no.
+            if !(await model.quickAdd(draft)) { text = typed }
+        }
+    }
+}
+
+struct EntryChip: View {
+    let chip: QuickEntry.Chip
+    let remove: () -> Void
+
+    private var symbol: String {
+        switch chip.kind {
+        case .date: "calendar"; case .time: "clock"; case .repeatRule: "repeat"; case .list: "list.bullet"; case .important: "star.fill"
+        }
+    }
+    private var tint: Color {
+        switch chip.kind {
+        case .date: .red; case .time: .blue; case .repeatRule: .purple; case .list: .gray; case .important: .yellow
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol).font(.caption2)
+            Text(chip.label).font(.caption)
+            Button(action: remove) { Image(systemName: "xmark").font(.caption2) }
+                .buttonStyle(.plain).accessibilityLabel("Ignore \(chip.label)")
+        }
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(tint.opacity(0.18), in: Capsule())
+        .foregroundStyle(tint)
     }
 }
 
@@ -257,6 +312,7 @@ struct ReminderRow: View {
             .accessibilityLabel(reminder.favorite ? "Unmark important" : "Mark important")
         }
         .padding(.vertical, 6)
+        .animation(.snappy(duration: 0.25), value: reminder.completed)
     }
 }
 
@@ -378,7 +434,16 @@ struct StatusBanner: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if let error = model.lastError {
+        if let undo = model.undo {
+            HStack(spacing: 12) {
+                Label("Completed “\(undo.title)”", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Button("Undo") { model.performUndo() }.keyboardShortcut("z", modifiers: .command)
+            }
+            .font(.callout).padding(10)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .padding()
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        } else if let error = model.lastError {
             Label(error, systemImage: "exclamationmark.triangle")
                 .font(.callout)
                 .padding(10)
