@@ -8,11 +8,11 @@ struct SamsungReminderApp: App {
         Window("Samsung Reminder", id: "main") {
             ContentView()
                 .environment(model)
-                .frame(minWidth: 720, minHeight: 440)
+                .frame(minWidth: 940, minHeight: 520)
                 .task { await model.start() }
                 .onOpenURL { model.handle(url: $0) }
         }
-        .defaultSize(width: 900, height: 600)
+        .defaultSize(width: 1100, height: 700)
         .commands {
             CommandGroup(after: .newItem) {
                 Button("New Reminder…") { model.showNewReminder = true }

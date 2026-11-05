@@ -109,7 +109,7 @@ struct NewReminderSheet: View {
             }
             .padding(16)
         }
-        .frame(width: 520, height: 640)
+        .frame(width: 560, height: 680)
         .disabled(busy)
         .onAppear { if case .category(let id) = model.filter { draft.categoryID = id } }
     }

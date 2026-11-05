@@ -290,6 +290,63 @@ final class AppModel {
         }
     }
 
+    struct Group {
+        let title: String?
+        let tint: Color
+        let reminders: [Reminder]
+    }
+
+    /// Sections like a modern to-do app: Overdue / Today / Later / No date (completed view stays flat).
+    var groupedReminders: [Group] {
+        let visible = visibleReminders
+        if filter == .completed { return visible.isEmpty ? [] : [Group(title: nil, tint: .secondary, reminders: visible)] }
+        let calendar = Calendar.current
+        let now = Date()
+        var overdue: [Reminder] = [], today: [Reminder] = [], later: [Reminder] = [], undated: [Reminder] = []
+        for reminder in visible {
+            guard let due = reminder.dueAt else { undated.append(reminder); continue }
+            if calendar.isDateInToday(due) { today.append(reminder) }
+            else if due < now { overdue.append(reminder) }
+            else { later.append(reminder) }
+        }
+        let byDue: (Reminder, Reminder) -> Bool = { ($0.dueAt ?? .distantFuture) < ($1.dueAt ?? .distantFuture) }
+        let byTitle: (Reminder, Reminder) -> Bool = { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        return [
+            Group(title: "Overdue", tint: .red, reminders: overdue.sorted(by: byDue)),
+            Group(title: "Today", tint: .accentColor, reminders: today.sorted(by: byDue)),
+            Group(title: "Later", tint: .secondary, reminders: later.sorted(by: byDue)),
+            Group(title: "No date", tint: .secondary, reminders: undated.sorted(by: byTitle)),
+        ].filter { !$0.reminders.isEmpty }
+    }
+
+    func count(for filter: Filter) -> Int {
+        let calendar = Calendar.current
+        let now = Date()
+        return snapshot.reminders.reduce(0) { total, reminder in
+            let matches: Bool
+            switch filter {
+            case .all: matches = !reminder.completed
+            case .today: matches = !reminder.completed && reminder.dueAt.map(calendar.isDateInToday) == true
+            case .upcoming: matches = !reminder.completed && (reminder.dueAt ?? .distantPast) > now
+            case .favorites: matches = reminder.favorite && !reminder.completed
+            case .completed: matches = reminder.completed
+            case .category(let id): matches = reminder.categoryID == id && !reminder.completed
+            }
+            return total + (matches ? 1 : 0)
+        }
+    }
+
+    var filterTitle: String {
+        switch filter {
+        case .all: "All"
+        case .today: "Today"
+        case .upcoming: "Upcoming"
+        case .favorites: "Important"
+        case .completed: "Completed"
+        case .category(let id): categoryName(id)
+        }
+    }
+
     var selectedReminder: Reminder? {
         guard let selectedReminderID else { return nil }
         return snapshot.reminders.first { $0.id == selectedReminderID }

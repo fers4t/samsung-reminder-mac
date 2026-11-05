@@ -9,15 +9,18 @@ struct ContentView: View {
             Sidebar()
         } content: {
             ReminderList()
-                .navigationSplitViewColumnWidth(min: 320, ideal: 380)
+                .navigationSplitViewColumnWidth(min: 320, ideal: 400)
         } detail: {
-            if let reminder = model.selectedReminder {
-                ReminderDetail(reminder: reminder)
-            } else {
-                ContentUnavailableView("Select a reminder", systemImage: "checklist")
+            Group {
+                if let reminder = model.selectedReminder {
+                    ReminderDetail(reminder: reminder).id(reminder.id)
+                } else {
+                    ContentUnavailableView("Select a reminder", systemImage: "checklist", description: Text("Or press ⌘N to add one."))
+                }
             }
+            .navigationSplitViewColumnWidth(min: 380, ideal: 480)
         }
-        .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search reminders")
+        .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search")
         .toolbar {
             ToolbarItemGroup {
                 if model.isSyncing { ProgressView().controlSize(.small) }
@@ -33,38 +36,43 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Sidebar
+
 struct Sidebar: View {
     @Environment(AppModel.self) private var model
+    @State private var creating = false
+    @State private var editing: ReminderCategory?
+    @State private var deleting: ReminderCategory?
 
     var body: some View {
         @Bindable var model = model
         List(selection: $model.filter) {
             Section {
-                Label("All", systemImage: "tray.full").tag(AppModel.Filter.all)
-                Label("Today", systemImage: "calendar").tag(AppModel.Filter.today)
-                Label("Upcoming", systemImage: "clock").tag(AppModel.Filter.upcoming)
-                Label("Favorites", systemImage: "star").tag(AppModel.Filter.favorites)
-                Label("Completed", systemImage: "checkmark.circle").tag(AppModel.Filter.completed)
+                SmartListRow(title: "Today", symbol: "calendar", color: .blue, count: model.count(for: .today)).tag(AppModel.Filter.today)
+                SmartListRow(title: "Upcoming", symbol: "clock", color: .orange, count: model.count(for: .upcoming)).tag(AppModel.Filter.upcoming)
+                SmartListRow(title: "All", symbol: "tray.full", color: .gray, count: model.count(for: .all)).tag(AppModel.Filter.all)
+                SmartListRow(title: "Important", symbol: "star", color: .yellow, count: model.count(for: .favorites)).tag(AppModel.Filter.favorites)
+                SmartListRow(title: "Completed", symbol: "checkmark", color: .green, count: nil).tag(AppModel.Filter.completed)
             }
-            Section("Lists") {
-                Label("My reminders", systemImage: "list.bullet").tag(AppModel.Filter.category(defaultCategoryID))
+            Section("My Lists") {
+                ListRow(name: "My reminders", color: .gray, count: model.count(for: .category(defaultCategoryID)))
+                    .tag(AppModel.Filter.category(defaultCategoryID))
                 ForEach(model.snapshot.categories) { category in
-                    Label { Text(category.name) } icon: {
-                        Image(systemName: "circle.fill").foregroundStyle(ListColor.color(category.color))
-                    }
-                    .tag(AppModel.Filter.category(category.id))
-                    .contextMenu {
-                        Button("Edit List…") { editing = category }
-                        Button("Delete List…", role: .destructive) { deleting = category }
-                    }
+                    ListRow(name: category.name, color: ListColor.color(category.color), count: model.count(for: .category(category.id)))
+                        .tag(AppModel.Filter.category(category.id))
+                        .contextMenu {
+                            Button("Edit List…") { editing = category }
+                            Button("Delete List…", role: .destructive) { deleting = category }
+                        }
                 }
             }
         }
         .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 180, ideal: 220)
+        .navigationSplitViewColumnWidth(min: 200, ideal: 230)
         .safeAreaInset(edge: .bottom) {
-            Button { creating = true } label: { Label("New List", systemImage: "plus.circle") }
-                .buttonStyle(.plain).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            Button { creating = true } label: { Label("Add List", systemImage: "plus.circle") }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                 .disabled(!model.isConnected)
         }
         .sheet(isPresented: $creating) { ListSheet(existing: nil) }
@@ -78,43 +86,82 @@ struct Sidebar: View {
             Text("Its reminders move to My reminders. This happens in Samsung Cloud on every device.")
         }
     }
-
-    @State private var creating = false
-    @State private var editing: ReminderCategory?
-    @State private var deleting: ReminderCategory?
 }
+
+struct SmartListRow: View {
+    let title: String, symbol: String, color: Color, count: Int?
+    var body: some View {
+        HStack {
+            Image(systemName: symbol).font(.caption.weight(.semibold)).foregroundStyle(.white)
+                .frame(width: 22, height: 22).background(color.gradient, in: RoundedRectangle(cornerRadius: 6))
+            Text(title)
+            Spacer()
+            if let count, count > 0 { Text("\(count)").font(.callout.monospacedDigit()).foregroundStyle(.secondary) }
+        }
+    }
+}
+
+struct ListRow: View {
+    let name: String, color: Color, count: Int
+    var body: some View {
+        HStack {
+            Circle().fill(color.gradient).frame(width: 10, height: 10).padding(.horizontal, 6)
+            Text(name).lineLimit(1)
+            Spacer()
+            if count > 0 { Text("\(count)").font(.callout.monospacedDigit()).foregroundStyle(.secondary) }
+        }
+    }
+}
+
+// MARK: - List
 
 struct ReminderList: View {
     @Environment(AppModel.self) private var model
+    @State private var pendingDelete: Reminder?
 
     var body: some View {
         @Bindable var model = model
-        let reminders = model.visibleReminders
+        let groups = model.groupedReminders
         Group {
             if !model.isConnected {
                 ContentUnavailableView {
                     Label("Not connected", systemImage: "bell.slash")
                 } description: {
-                    Text("Connect your Samsung Cloud credential to load reminders.")
+                    Text("Sign in with your Samsung Account to load reminders.")
                 } actions: {
                     Button("Connect…") { model.showConnect = true }.buttonStyle(.borderedProminent)
                 }
-            } else if reminders.isEmpty {
-                ContentUnavailableView("Nothing here", systemImage: "checkmark.circle", description: Text("No reminders match this view."))
             } else {
-                List(reminders, selection: $model.selectedReminderID) { reminder in
-                    ReminderRow(reminder: reminder)
-                        .tag(reminder.id)
-                        .contextMenu {
-                            Button(reminder.completed ? "Mark Incomplete" : "Mark Complete") { model.toggleCompleted(reminder) }
-                            Button(reminder.favorite ? "Remove Favorite" : "Add to Favorites") { model.toggleFavorite(reminder) }
-                            Divider()
-                            Button("Delete…", role: .destructive) { pendingDelete = reminder }
+                List(selection: $model.selectedReminderID) {
+                    if groups.isEmpty {
+                        ContentUnavailableView("All clear", systemImage: "checkmark.circle", description: Text("Nothing in this view."))
+                            .listRowSeparator(.hidden)
+                    }
+                    ForEach(groups, id: \.title) { group in
+                        Section {
+                            ForEach(group.reminders) { reminder in
+                                ReminderRow(reminder: reminder)
+                                    .tag(reminder.id)
+                                    .listRowSeparator(.hidden)
+                                    .contextMenu {
+                                        Button(reminder.completed ? "Mark Incomplete" : "Mark Complete") { model.toggleCompleted(reminder) }
+                                        Button(reminder.favorite ? "Unmark Important" : "Mark Important") { model.toggleFavorite(reminder) }
+                                        Divider()
+                                        Button("Delete…", role: .destructive) { pendingDelete = reminder }
+                                    }
+                            }
+                        } header: {
+                            if let title = group.title { Text(title).font(.caption.weight(.semibold)).foregroundStyle(group.tint) }
                         }
+                    }
                 }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .safeAreaInset(edge: .bottom) { QuickAddBar() }
             }
         }
-        .navigationTitle(title)
+        .navigationTitle(model.filterTitle)
+        .navigationSubtitle(model.isConnected ? "\(model.count(for: model.filter)) open" : "")
         .confirmationDialog("Delete “\(pendingDelete?.title ?? "")”?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 if let pendingDelete { model.delete(pendingDelete) }
@@ -124,17 +171,43 @@ struct ReminderList: View {
             Text("This removes the reminder from Samsung Cloud on every device.")
         }
     }
+}
 
-    @State private var pendingDelete: Reminder?
+/// Apple-Reminders-style inline add: type, press Return, done. ⌘N still opens the full form.
+struct QuickAddBar: View {
+    @Environment(AppModel.self) private var model
+    @State private var title = ""
+    @State private var busy = false
+    @FocusState private var focused: Bool
 
-    private var title: String {
-        switch model.filter {
-        case .all: "All"
-        case .today: "Today"
-        case .upcoming: "Upcoming"
-        case .favorites: "Favorites"
-        case .completed: "Completed"
-        case .category(let id): model.categoryName(id)
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor).font(.title3)
+            TextField("", text: $title, prompt: Text("New reminder"))
+                .textFieldStyle(.plain)
+                .focused($focused)
+                .onSubmit(add)
+                .disabled(busy)
+            if busy { ProgressView().controlSize(.small) }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    private func add() {
+        let text = title.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        var draft = ReminderDraft()
+        draft.title = text
+        if case .category(let id) = model.filter { draft.categoryID = id }
+        if model.filter == .today { draft.schedule = .allDay(Date()) }
+        if model.filter == .favorites { draft.favorite = true }
+        busy = true
+        Task {
+            if await model.create(draft) { title = "" }
+            busy = false
+            focused = true
         }
     }
 }
@@ -144,62 +217,108 @@ struct ReminderRow: View {
     let reminder: Reminder
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Button { model.toggleCompleted(reminder) } label: {
-                Image(systemName: reminder.completed ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(reminder.completed ? Color.accentColor : .secondary)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(reminder.completed ? "Mark incomplete" : "Mark complete")
-
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(alignment: .top, spacing: 12) {
+            CheckCircle(done: reminder.completed) { model.toggleCompleted(reminder) }
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(reminder.title.isEmpty ? "Untitled" : reminder.title)
+                    .font(.body.weight(.medium))
                     .strikethrough(reminder.completed)
                     .foregroundStyle(reminder.completed ? .secondary : .primary)
                     .lineLimit(2)
                 if !reminder.text.isEmpty, reminder.text != reminder.title {
                     Text(reminder.text).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 }
-                HStack(spacing: 6) {
-                    if let due = reminder.dueAt { DueLabel(date: due, allDay: reminder.allDay, overdue: !reminder.completed && due < Date()) }
-                    if reminder.repeats { Image(systemName: "repeat").font(.caption2).foregroundStyle(.secondary) }
-                    if reminder.hasLocation { Image(systemName: "mappin").font(.caption2).foregroundStyle(.secondary) }
+                HStack(spacing: 8) {
+                    if let due = reminder.dueAt {
+                        DueChip(date: due, allDay: reminder.allDay, overdue: !reminder.completed && due < Date(), repeats: reminder.repeats)
+                    }
                     if !reminder.checklist.isEmpty {
-                        Text("\(reminder.checklist.filter(\.done).count)/\(reminder.checklist.count)")
-                            .font(.caption2).foregroundStyle(.secondary)
+                        Label("\(reminder.checklist.filter(\.done).count)/\(reminder.checklist.count)", systemImage: "checklist")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if reminder.hasLocation { Image(systemName: "location").font(.caption).foregroundStyle(.secondary) }
+                    if reminder.attachmentCount > 0 { Image(systemName: "photo").font(.caption).foregroundStyle(.secondary) }
+                    if model.filter != .category(reminder.categoryID), reminder.categoryID != defaultCategoryID,
+                       let category = model.snapshot.categories.first(where: { $0.id == reminder.categoryID }) {
+                        HStack(spacing: 4) {
+                            Circle().fill(ListColor.color(category.color)).frame(width: 7, height: 7)
+                            Text(category.name).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
             Spacer(minLength: 0)
             Button { model.toggleFavorite(reminder) } label: {
                 Image(systemName: reminder.favorite ? "star.fill" : "star")
-                    .foregroundStyle(reminder.favorite ? .yellow : .secondary)
+                    .foregroundStyle(reminder.favorite ? Color.yellow : Color.secondary.opacity(0.35))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(reminder.favorite ? "Remove favorite" : "Add favorite")
+            .accessibilityLabel(reminder.favorite ? "Unmark important" : "Mark important")
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 }
 
-struct DueLabel: View {
+/// Round checkbox with a short fill animation, like Reminders.
+struct CheckCircle: View {
+    let done: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle().strokeBorder(done ? Color.accentColor : Color.secondary.opacity(0.6), lineWidth: 1.5)
+                if done {
+                    Circle().fill(Color.accentColor).padding(3)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .frame(width: 20, height: 20)
+            .contentShape(Circle())
+            .animation(.snappy(duration: 0.2), value: done)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(done ? "Mark incomplete" : "Mark complete")
+    }
+}
+
+struct DueChip: View {
     let date: Date
     let allDay: Bool
     let overdue: Bool
+    var repeats = false
+
+    private var text: String {
+        let calendar = Calendar.current
+        let day: String
+        if calendar.isDateInToday(date) { day = "Today" }
+        else if calendar.isDateInTomorrow(date) { day = "Tomorrow" }
+        else if calendar.isDateInYesterday(date) { day = "Yesterday" }
+        else if calendar.isDate(date, equalTo: Date(), toGranularity: .year) { day = date.formatted(.dateTime.day().month(.abbreviated)) }
+        else { day = date.formatted(.dateTime.day().month(.abbreviated).year()) }
+        return allDay ? day : "\(day), \(date.formatted(.dateTime.hour().minute()))"
+    }
 
     var body: some View {
-        Text(date, format: allDay ? .dateTime.day().month().year() : .dateTime.day().month().hour().minute())
-            .font(.caption)
-            .foregroundStyle(overdue ? .red : .secondary)
+        HStack(spacing: 3) {
+            Image(systemName: repeats ? "repeat" : "calendar")
+            Text(text)
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(overdue ? Color.red : Calendar.current.isDateInToday(date) ? Color.accentColor : Color.secondary)
     }
 }
+
+// MARK: - Detail
 
 struct ReminderDetail: View {
     @Environment(AppModel.self) private var model
     let reminder: Reminder
     @State private var draft: ReminderDraft
-    @State private var busy = false
+    @State private var saveTask: Task<Void, Never>?
+    @State private var saving = false
+    @State private var lastSaved: Date?
 
     init(reminder: Reminder) {
         self.reminder = reminder
@@ -209,47 +328,49 @@ struct ReminderDetail: View {
     private var dirty: Bool { draft != ReminderDraft(reminder: reminder) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ReminderEditor(draft: $draft)
-            VStack(alignment: .leading, spacing: 6) {
-                if reminder.attachmentCount > 0 {
-                    Label("\(reminder.attachmentCount) photo attachment(s) — viewable on the phone only", systemImage: "photo")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if let url = reminder.url.flatMap(URL.init(string:)), ["http", "https"].contains(url.scheme ?? "") {
-                    Link(reminder.webTitle ?? url.absoluteString, destination: url).font(.caption).lineLimit(1)
-                }
+        ReminderEditor(draft: $draft, reminder: reminder)
+            .safeAreaInset(edge: .bottom) {
                 HStack {
-                    Text("Modified \(reminder.modifiedAt, format: .dateTime)").font(.caption).foregroundStyle(.secondary)
+                    Group {
+                        if saving { Label("Saving…", systemImage: "arrow.triangle.2.circlepath") }
+                        else if dirty { Label("Unsaved changes", systemImage: "pencil") }
+                        else if let lastSaved { Label("Saved \(lastSaved, style: .relative) ago", systemImage: "checkmark.icloud") }
+                        else { Text("Modified \(reminder.modifiedAt, format: .dateTime)") }
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button(reminder.completed ? "Mark Incomplete" : "Mark Complete") { model.toggleCompleted(reminder) }
-                    Button("Revert") { draft = ReminderDraft(reminder: reminder) }.disabled(!dirty)
-                    Button("Save") { save() }
-                        .keyboardShortcut("s")
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!dirty || busy || draft.title.trimmingCharacters(in: .whitespaces).isEmpty)
+                    Button(reminder.completed ? "Mark Incomplete" : "Complete") { model.toggleCompleted(reminder) }
+                    Button("Save Now") { flush() }.keyboardShortcut("s").disabled(!dirty || saving)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.bar)
+                .overlay(alignment: .top) { Divider() }
+            }
+            // Autosave a second after the last edit; the actor serialises the uploads.
+            .onChange(of: draft) { _, _ in
+                saveTask?.cancel()
+                guard dirty, !draft.title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                saveTask = Task {
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled else { return }
+                    await save()
                 }
             }
-            .padding(12)
-        }
-        // A background sync may replace the reminder; keep local edits unless the user has none.
-        .onChange(of: reminder) { _, updated in if !dirty { draft = ReminderDraft(reminder: updated) } }
-        .onChange(of: draft.checklist.map(\.done)) { old, new in
-            // Checking an item off is the everyday action; save it right away when nothing else is pending.
-            guard old.count == new.count, old != new else { return }
-            var quick = ReminderDraft(reminder: reminder)
-            guard quick.checklist.count == new.count else { return }
-            for (index, done) in new.enumerated() { quick.checklist[index].done = done }
-            if draft == quick { save() }
-        }
+            // A background sync may replace the reminder; adopt it only when nothing is pending.
+            .onChange(of: reminder) { _, updated in if !dirty { draft = ReminderDraft(reminder: updated) } }
+            .onDisappear { flush() }
     }
 
-    private func save() {
-        busy = true
-        Task {
-            _ = await model.update(reminder.id, draft)
-            busy = false
-        }
+    private func flush() {
+        saveTask?.cancel()
+        guard dirty else { return }
+        Task { await save() }
+    }
+
+    private func save() async {
+        saving = true
+        if await model.update(reminder.id, draft) { lastSaved = Date() }
+        saving = false
     }
 }
 
@@ -261,13 +382,13 @@ struct StatusBanner: View {
             Label(error, systemImage: "exclamationmark.triangle")
                 .font(.callout)
                 .padding(10)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
                 .padding()
                 .transition(.move(edge: .bottom))
         } else if model.snapshot.truncated {
             Label("Showing the first 500 reminders; Samsung's list API returns one page.", systemImage: "info.circle")
                 .font(.callout).padding(10)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
                 .padding()
         }
     }
