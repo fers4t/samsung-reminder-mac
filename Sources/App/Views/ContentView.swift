@@ -151,7 +151,9 @@ struct ReminderList: View {
                                     }
                             }
                         } header: {
-                            if let title = group.title { Text(title).font(.caption.weight(.semibold)).foregroundStyle(group.tint) }
+                            if let title = group.title {
+                                Text(title).font(.caption.weight(.semibold)).foregroundStyle(group.tint).padding(.vertical, 2)
+                            }
                         }
                     }
                 }
@@ -311,8 +313,7 @@ struct ReminderRow: View {
             .buttonStyle(.plain)
             .accessibilityLabel(reminder.favorite ? "Unmark important" : "Mark important")
         }
-        .padding(.vertical, 6)
-        .animation(.snappy(duration: 0.25), value: reminder.completed)
+        .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
     }
 }
 
@@ -325,14 +326,13 @@ struct CheckCircle: View {
         Button(action: action) {
             ZStack {
                 Circle().strokeBorder(done ? Color.accentColor : Color.secondary.opacity(0.6), lineWidth: 1.5)
-                if done {
-                    Circle().fill(Color.accentColor).padding(3)
-                        .transition(.scale.combined(with: .opacity))
-                }
+                Circle().fill(Color.accentColor).padding(3)
+                    .scaleEffect(done ? 1 : 0.01)
+                    .opacity(done ? 1 : 0)
+                    .animation(.snappy(duration: 0.2), value: done)
             }
             .frame(width: 20, height: 20)
             .contentShape(Circle())
-            .animation(.snappy(duration: 0.2), value: done)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(done ? "Mark incomplete" : "Mark complete")

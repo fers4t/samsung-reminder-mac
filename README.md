@@ -69,6 +69,7 @@ xcodebuild -scheme SamsungReminder -configuration Release build
 xcodebuild -scheme SamsungReminder test
 ```
 
+`Tools/install.sh [Debug|Release]` builds and copies the app into `/Applications` (default Release).
 `Config/Local.xcconfig` is git-ignored. App Groups on macOS require a signing team; without one the widget cannot share the snapshot.
 
 ## Security
