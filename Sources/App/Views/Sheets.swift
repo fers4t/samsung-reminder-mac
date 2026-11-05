@@ -10,38 +10,56 @@ struct ConnectSheet: View {
     @State private var deviceId = ""
     @State private var email = ""
     @State private var busy = false
+    @State private var showManual = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Connect Samsung Cloud").font(.title2.weight(.semibold))
-            Text("This unofficial app talks directly to Samsung Cloud with a credential you provide. It is stored only in your macOS Keychain, never leaves this Mac except in requests to api.samsungcloud.com, and can be removed from Settings at any time.")
+            Text("Sign in on Samsung's own account page in your browser. This app never sees your password or verification code; it receives only a session token, which is kept in your macOS Keychain and sent solely to Samsung's servers.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Form {
-                SecureField("Access token", text: $accessToken)
-                TextField("User ID", text: $userId)
-                TextField("Device ID", text: $deviceId)
-                TextField("Account email (optional, display only)", text: $email)
+            HStack {
+                Button { Task { await model.beginSignIn() } } label: {
+                    Label(model.signInInProgress ? "Waiting for the browser…" : "Sign in with Samsung Account", systemImage: "person.crop.circle.badge.checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(busy)
+                if model.signInInProgress { ProgressView().controlSize(.small) }
             }
-            .textFieldStyle(.roundedBorder)
-            .autocorrectionDisabled()
+            if model.signInInProgress {
+                Text("Finish signing in. Samsung will hand you back to this app automatically. If the browser asks which app should open the link, choose Samsung Reminder.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if let error = model.lastError {
-                Text(error).font(.callout).foregroundStyle(.red)
+                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
             }
-            Link("Where do I get these values?",
+            DisclosureGroup("Advanced: paste an existing credential", isExpanded: $showManual) {
+                Form {
+                    SecureField("Access token", text: $accessToken)
+                    TextField("User ID", text: $userId)
+                    TextField("Device ID", text: $deviceId)
+                    TextField("Account email (optional, display only)", text: $email)
+                }
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                HStack {
+                    Button("Paste credential JSON") { pasteJSON() }
+                    Spacer()
+                    Button("Connect with pasted credential") { connect() }
+                        .disabled(busy || accessToken.isEmpty || userId.isEmpty || deviceId.isEmpty)
+                }
+                .padding(.top, 6)
+            }
+            .font(.callout)
+            Link("How this works",
                  destination: URL(string: "https://github.com/fers4t/samsung-reminder-mac#how-it-gets-your-data")!)
                 .font(.callout)
             HStack {
-                Button("Paste credential JSON") { pasteJSON() }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Connect") { connect() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(busy || accessToken.isEmpty || userId.isEmpty || deviceId.isEmpty)
             }
         }
         .padding(24)
-        .frame(width: 520)
+        .frame(width: 540)
         .disabled(busy)
     }
 

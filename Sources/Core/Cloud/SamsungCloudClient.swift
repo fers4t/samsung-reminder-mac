@@ -170,6 +170,14 @@ public extension URLSession {
         config.timeoutIntervalForResource = 60
         config.waitsForConnectivity = false
         config.httpMaximumConnectionsPerHost = 4
-        return URLSession(configuration: config)
+        return URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
     }()
+}
+
+/// Every Samsung endpoint we call answers directly; a redirect would mean an untrusted hop.
+final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
 }

@@ -38,6 +38,14 @@
 				<string>samsungreminder</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Samsung Account sign-in callback</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ms-app</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

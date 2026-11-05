@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import AppKit
 import SwiftUI
 import WidgetKit
 import os
@@ -113,6 +114,36 @@ final class AppModel {
             await rescheduleNotifications()
         } catch {
             await handle(error)
+        }
+    }
+
+    private(set) var signInInProgress = false
+
+    /// Opens Samsung's sign-in page in the default browser; the callback lands in `handle(url:)`.
+    func beginSignIn() async {
+        guard let service else { return }
+        do {
+            let url = try await service.beginSignIn()
+            signInInProgress = true
+            lastError = nil
+            NSWorkspace.shared.open(url)
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func completeSignIn(callback: URL) async {
+        guard let service else { return }
+        defer { signInInProgress = false }
+        do {
+            try await service.completeSignIn(callback: callback)
+            await refreshConnectionState()
+            lastError = nil
+            showConnect = false
+            await sync(reason: "sign-in")
+            restartRefreshLoop()
+        } catch {
+            lastError = error.localizedDescription
         }
     }
 
@@ -250,6 +281,11 @@ final class AppModel {
     }
 
     func handle(url: URL) {
+        if SamsungAccountAuth.isCallback(url) {
+            NSApp.activate(ignoringOtherApps: true)
+            Task { await completeSignIn(callback: url) }
+            return
+        }
         // samsungreminder://reminder/<id> from the widget.
         guard url.scheme == "samsungreminder", url.host == "reminder" else { return }
         let id = url.lastPathComponent

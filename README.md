@@ -21,30 +21,24 @@ Samsung Cloud exposes a generic record store at `api.samsungcloud.com/data/v2/<t
 `x-sc-uid`, `x-sc-access-token`, `x-sc-app-id` and `x-sc-dvc-id`. Reminders live in the table
 `com.samsung.android.app.reminder`, lists in `com.samsung.android.app.reminder.category`.
 
-The Windows client obtains the access token from **Samsung Internet for Windows**: a signed Samsung extension exposes a
-private `chrome.credentials` API that mints the token for the signed-in Samsung Account. **That browser does not exist on macOS**,
-so this app cannot mint a token itself. Instead you provide the credential once and it is kept in your Keychain.
+The Windows client obtains the access token from **Samsung Internet for Windows**, whose signed Calendar extension exposes a
+private `chrome.credentials` API. That browser does not exist on macOS, so this app signs in differently:
 
-On a Windows PC with Samsung Internet installed and signed in to your Samsung Account:
+1. **Sign in with Samsung Account** opens Samsung's own account page in your default browser (the same web flow
+   Samsung's Windows apps use, with PKCE and an encrypted service parameter from `getEntryPoint`).
+2. Samsung redirects to its registered `ms-app://` callback. This app registers that URL scheme on your Mac, so macOS
+   hands the callback straight to it. Your password and second factor never touch the app.
+3. The callback is exchanged for a Samsung Account session (`/auth/oauth2/authenticate`), then for an access/refresh token
+   pair for the Reminder client (`/auth/oauth2/v2/authorize` + `/auth/oauth2/token`). Tokens are renewed with the refresh
+   token, and re-issued from the session when that expires. Everything is stored in the Keychain only.
 
-1. Open `chrome-extension://bhbojgnklikmfoopegjhgfbklnpbjboa/src/index.html` in a Samsung Internet tab (Samsung's signed Calendar extension).
-2. Press F12, and in the Console run:
+The sign-in protocol follows [charlesbel/samsung-re-health](https://github.com/charlesbel/samsung-re-health) and
+[samsung-re-find](https://github.com/charlesbel/samsung-re-find) (MIT), which run the same flow on Linux. The one assumption
+specific to Reminder is that its Samsung Cloud app id `8o8b82h22a` also serves as its OAuth client id, as it does for
+Samsung Health. If Samsung rejects that client, the app reports the HTTP status on the connect screen.
 
-   ```js
-   chrome.credentials.getAccessToken({provider:'samsung'}, t =>
-     chrome.credentials.getAccountInfo({provider:'samsung'}, a =>
-       console.log(JSON.stringify({accessToken:t, userId:a.identifiers.userId,
-         deviceId:crypto.randomUUID(), accountEmail:a.identifiers.loginId}))))
-   ```
-
-3. Copy the printed JSON and use **Connect → Paste credential JSON** on the Mac.
-
-Alternatively, run the reference Windows client once: it stores the same JSON in Windows Credential Manager under
-`SamsungReminderDesktop.SamsungCloud`. The console recipe has not been verified by the maintainers on Windows; the
-reference client issues the same calls through the DevTools protocol, so the extension page's own console is expected to work.
-
-When Samsung expires the token the app returns to the connect screen; nothing else is stored.
-Contributions that add a native macOS token source (e.g. a Samsung Account sign-in flow) are welcome, see `ReminderService.connect`.
+**Advanced:** the connect screen also accepts a pasted credential JSON `{"accessToken","userId","deviceId"}`, for example
+one exported from the Windows client's Credential Manager entry `SamsungReminderDesktop.SamsungCloud`.
 
 ## Architecture
 

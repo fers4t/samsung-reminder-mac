@@ -35,6 +35,7 @@ public actor ReminderService {
 
     public func disconnect() throws {
         syncInFlight?.cancel()
+        pendingSignIn = nil
         credential = nil
         rawReminders = [:]
         snapshot = .empty
@@ -42,16 +43,57 @@ public actor ReminderService {
         try store.clear()
     }
 
-    private func client() throws -> SamsungCloudClient {
-        guard let credential else { throw CloudError.notConnected }
+    // MARK: Samsung Account sign-in (browser based)
+
+    private let accountAuth = SamsungAccountAuth()
+    private var pendingSignIn: SamsungAccountAuth.Pending?
+
+    /// Returns the Samsung sign-in URL to open in the browser; the callback arrives via `completeSignIn`.
+    public func beginSignIn() async throws -> URL {
+        let started = try await accountAuth.start(existingDeviceID: credential?.deviceId)
+        pendingSignIn = started.pending
+        return started.url
+    }
+
+    public var hasPendingSignIn: Bool { pendingSignIn != nil }
+
+    /// Handles the `ms-app://` callback, mints the Reminder token, probes the table and persists.
+    public func completeSignIn(callback: URL) async throws {
+        guard let pending = pendingSignIn else { throw SamsungAccountAuth.AuthError.pendingExpired }
+        let identity = try await accountAuth.complete(callback: callback, pending: pending)
+        pendingSignIn = nil
+        let token = try await accountAuth.issueToken(identity: identity)
+        try await connect(CloudCredential(identity: identity, token: token))
+    }
+
+    /// Refresh-token renewal, falling back to a fresh issue from the master session.
+    private func renew(_ current: CloudCredential) async throws -> CloudCredential {
+        guard let identity = current.identity, let refreshToken = current.refreshToken else { throw CloudError.unauthorized }
+        let old = SamsungAccountAuth.ServiceToken(accessToken: current.accessToken, refreshToken: refreshToken, expiresAt: current.expiresAt ?? .distantPast)
+        let token: SamsungAccountAuth.ServiceToken
+        do { token = try await accountAuth.refresh(old, identity: identity) }
+        catch { token = try await accountAuth.issueToken(identity: identity) }
+        var renewed = CloudCredential(identity: identity, token: token)
+        renewed.accountEmail = current.accountEmail
+        try keychain.save(renewed)
+        credential = renewed
+        return renewed
+    }
+
+    private func client() async throws -> SamsungCloudClient {
+        guard var credential else { throw CloudError.notConnected }
+        if credential.needsRenewal { credential = try await renew(credential) }
         return SamsungCloudClient(credential: credential)
     }
 
-    /// Runs `body`; on 401/403 drops the credential so the UI shows "reconnect".
+    /// Runs `body`; on 401/403 tries one renewal, then drops the credential so the UI shows "reconnect".
     private func authorized<T: Sendable>(_ body: (SamsungCloudClient) async throws -> T) async throws -> T {
         do {
-            return try await body(try client())
+            return try await body(try await client())
         } catch CloudError.unauthorized {
+            if let current = credential, current.canRenew, let renewed = try? await renew(current) {
+                if let result = try? await body(SamsungCloudClient(credential: renewed)) { return result }
+            }
             credential = nil
             try? keychain.delete()
             throw CloudError.unauthorized
