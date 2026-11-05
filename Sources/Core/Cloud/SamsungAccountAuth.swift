@@ -17,12 +17,12 @@ public struct SamsungAccountAuth: Sendable {
     static let pendingMaxAge: TimeInterval = 15 * 60
 
     public enum AuthError: LocalizedError, Sendable {
-        case entryPoint, untrustedURL, pendingExpired, redirectMismatch, missingParameter(String), decrypt
+        case entryPoint, untrustedURL(String), pendingExpired, redirectMismatch, missingParameter(String), decrypt
         case http(String, Int), malformed(String)
         public var errorDescription: String? {
             switch self {
             case .entryPoint: return "Samsung Account entry point is unavailable."
-            case .untrustedURL: return "Samsung returned an untrusted URL."
+            case .untrustedURL(let host): return "Samsung returned an untrusted auth server (\(host))."
             case .pendingExpired: return "The sign-in attempt expired. Start again."
             case .redirectMismatch: return "The browser callback did not match this sign-in."
             case .missingParameter(let name): return "Samsung's callback is missing \(name)."
@@ -211,15 +211,22 @@ public struct SamsungAccountAuth: Sendable {
             && (url.port == nil || url.port == 443) && url.path.hasPrefix(pathPrefix) && url.query == nil && url.fragment == nil
     }
 
-    /// Samsung may hand back a regional auth host; allow only its own domains, bare origin.
+    /// Samsung may hand back a regional auth host; allow only Samsung-owned domains, bare https origin.
     static func trustedAuthServer(_ value: String) throws -> URL {
-        guard let url = URL(string: value), url.scheme == "https", let host = url.host?.lowercased(),
-              host == "account.samsung.com" || host == "samsungosp.com" || host.hasSuffix(".samsungosp.com"),
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
+        let shown = String(trimmed.prefix(80)).replacingOccurrences(of: "[^A-Za-z0-9.:/-]", with: "?", options: .regularExpression)
+        guard let url = URL(string: trimmed), url.scheme == "https", let host = url.host?.lowercased(),
+              Self.isSamsungHost(host),
               url.user == nil, url.password == nil, url.port == nil || url.port == 443,
               url.path.isEmpty || url.path == "/", url.query == nil, url.fragment == nil,
               let origin = URL(string: "https://\(host)")
-        else { throw AuthError.untrustedURL }
+        else { throw AuthError.untrustedURL(shown) }
         return origin
+    }
+
+    static func isSamsungHost(_ host: String) -> Bool {
+        for domain in ["samsung.com", "samsungosp.com"] where host == domain || host.hasSuffix("." + domain) { return true }
+        return false
     }
 
     static func form(url: URL, fields: [(String, String)]) -> URLRequest {
