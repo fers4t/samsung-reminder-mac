@@ -1,0 +1,3 @@
+// Copy to Config/Local.xcconfig and fill in. That file is git-ignored.
+BUNDLE_ID_PREFIX = com.yourcompany
+DEVELOPMENT_TEAM = ABCDE12345

@@ -1,0 +1,209 @@
+import SwiftUI
+
+/// Manual credential entry. See README for how the token is obtained; macOS has
+/// no Samsung Browser, so the private credential API the Windows client uses is unavailable.
+struct ConnectSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var accessToken = ""
+    @State private var userId = ""
+    @State private var deviceId = ""
+    @State private var email = ""
+    @State private var busy = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Connect Samsung Cloud").font(.title2.weight(.semibold))
+            Text("This unofficial app talks directly to Samsung Cloud with a credential you provide. It is stored only in your macOS Keychain, never leaves this Mac except in requests to api.samsungcloud.com, and can be removed from Settings at any time.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Form {
+                SecureField("Access token", text: $accessToken)
+                TextField("User ID", text: $userId)
+                TextField("Device ID", text: $deviceId)
+                TextField("Account email (optional, display only)", text: $email)
+            }
+            .textFieldStyle(.roundedBorder)
+            .autocorrectionDisabled()
+            if let error = model.lastError {
+                Text(error).font(.callout).foregroundStyle(.red)
+            }
+            HStack {
+                Button("Paste credential JSON") { pasteJSON() }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Connect") { connect() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || accessToken.isEmpty || userId.isEmpty || deviceId.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
+        .disabled(busy)
+    }
+
+    private func connect() {
+        busy = true
+        Task {
+            _ = await model.connect(CloudCredential(accessToken: accessToken, userId: userId, deviceId: deviceId,
+                                                    accountEmail: email.isEmpty ? nil : email))
+            busy = false
+            // Clear the token from view state regardless of outcome.
+            accessToken = ""
+        }
+    }
+
+    /// Accepts `{"accessToken":"…","userId":"…","deviceId":"…"}` — the same shape
+    /// the reference Windows client stores.
+    private func pasteJSON() {
+        guard let string = NSPasteboard.general.string(forType: .string),
+              string.utf8.count < 16_384,
+              let data = string.data(using: .utf8),
+              let credential = try? JSONDecoder().decode(CloudCredential.self, from: data) else { return }
+        accessToken = credential.accessToken
+        userId = credential.userId
+        deviceId = credential.deviceId
+        email = credential.accountEmail ?? ""
+    }
+}
+
+struct NewReminderSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var text = ""
+    @State private var hasDue = false
+    @State private var dueAt = Calendar.current.nextDate(after: Date(), matching: DateComponents(minute: 0), matchingPolicy: .nextTime) ?? Date()
+    @State private var categoryID = defaultCategoryID
+    @State private var busy = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("New Reminder").font(.title2.weight(.semibold))
+            Form {
+                TextField("Title", text: $title)
+                TextField("Notes", text: $text, axis: .vertical).lineLimit(3...6)
+                Picker("List", selection: $categoryID) {
+                    Text("My reminders").tag(defaultCategoryID)
+                    ForEach(model.snapshot.categories) { Text($0.name).tag($0.id) }
+                }
+                Toggle("Remind me at", isOn: $hasDue)
+                if hasDue {
+                    DatePicker("Time", selection: $dueAt, displayedComponents: [.date, .hourAndMinute])
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+            if let error = model.lastError { Text(error).font(.callout).foregroundStyle(.red) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Add") { add() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || title.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+        .disabled(busy)
+        .onAppear {
+            if case .category(let id) = model.filter { categoryID = id }
+        }
+    }
+
+    private func add() {
+        busy = true
+        Task {
+            let ok = await model.create(.init(title: title, text: text, dueAt: hasDue ? dueAt : nil, categoryID: categoryID))
+            busy = false
+            if ok { dismiss() }
+        }
+    }
+}
+
+struct SettingsView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        Form {
+            Section("Account") {
+                if model.isConnected {
+                    LabeledContent("Connected as", value: model.accountEmail ?? model.accountHint ?? "Samsung account")
+                    Button("Disconnect Samsung account", role: .destructive) { Task { await model.disconnect() } }
+                    Text("Removes the credential from the Keychain and the local cache. Reminders in Samsung Cloud are untouched.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Button("Connect…") { model.showConnect = true }
+                }
+            }
+            Section("Sync") {
+                Picker("Refresh every", selection: $model.refreshIntervalMinutes) {
+                    ForEach([1, 2, 5, 10, 15, 30, 60], id: \.self) { Text("\($0) min").tag($0) }
+                }
+                LabeledContent("Last sync") {
+                    if model.snapshot.syncedAt == .distantPast { Text("Never") }
+                    else { Text(model.snapshot.syncedAt, format: .relative(presentation: .named)) }
+                }
+            }
+            Section("Notifications") {
+                Toggle("Notify me when a reminder is due", isOn: $model.notificationsEnabled)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 440)
+        .padding(.vertical, 8)
+    }
+}
+
+struct MenuBarContent: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Upcoming").font(.headline)
+                Spacer()
+                if model.isSyncing { ProgressView().controlSize(.mini) }
+                Button { Task { await model.sync(reason: "menubar") } } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).disabled(!model.isConnected)
+            }
+            let pending = model.snapshot.pending(limit: 8)
+            if !model.isConnected {
+                Text("Not connected").foregroundStyle(.secondary)
+            } else if pending.isEmpty {
+                Text("All done 🎉").foregroundStyle(.secondary)
+            } else {
+                ForEach(pending) { reminder in
+                    Button {
+                        model.toggleCompleted(reminder)
+                    } label: {
+                        HStack {
+                            Image(systemName: "circle")
+                            Text(reminder.title).lineLimit(1)
+                            Spacer()
+                            if let due = reminder.dueAt {
+                                Text(due, format: Calendar.current.isDateInToday(due) ? .dateTime.hour().minute() : .dateTime.day().month())
+                                    .foregroundStyle(due < Date() ? .red : .secondary).font(.caption)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Divider()
+            HStack {
+                Button("Open Samsung Reminder") {
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                Spacer()
+                Button("Quit") { NSApp.terminate(nil) }
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .frame(width: 320)
+    }
+}

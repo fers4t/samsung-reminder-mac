@@ -1,0 +1,22 @@
+# Xcode
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+build/
+*.xcresult
+.swiftpm/
+.build/
+
+# Local, machine-specific configuration (team id, bundle prefix). Never commit.
+Config/Local.xcconfig
+
+# macOS
+.DS_Store
+
+# Secrets / exports — never commit anything matching these
+*.credential.json
+*.token
+*.p12
+*.mobileprovision
+*.provisionprofile
+.env
