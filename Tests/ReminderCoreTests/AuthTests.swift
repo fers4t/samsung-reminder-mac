@@ -48,6 +48,7 @@ final class AuthTests: XCTestCase {
         XCTAssertFalse(SamsungAccountAuth.isCallback(URL(string: "ms-app://s-1-15-2-1?code=1")!))
         XCTAssertEqual(try SamsungAccountAuth.trustedAuthServer("https://eu-auth2.samsungosp.com").absoluteString, "https://eu-auth2.samsungosp.com")
         XCTAssertEqual(try SamsungAccountAuth.trustedAuthServer(" https://eu-auth.samsung.com/ \n").absoluteString, "https://eu-auth.samsung.com")
+        XCTAssertEqual(try SamsungAccountAuth.trustedAuthServer("eu-auth2.samsungosp.com").absoluteString, "https://eu-auth2.samsungosp.com")
         XCTAssertThrowsError(try SamsungAccountAuth.trustedAuthServer("https://evil.com"))
         XCTAssertThrowsError(try SamsungAccountAuth.trustedAuthServer("https://notsamsung.com"))
         XCTAssertThrowsError(try SamsungAccountAuth.trustedAuthServer("https://samsungosp.com.evil.com"))

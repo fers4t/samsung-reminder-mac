@@ -213,7 +213,9 @@ public struct SamsungAccountAuth: Sendable {
 
     /// Samsung may hand back a regional auth host; allow only Samsung-owned domains, bare https origin.
     static func trustedAuthServer(_ value: String) throws -> URL {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
+        var trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
+        // Samsung returns a bare host ("eu-auth2.samsungosp.com"); only https is acceptable anyway.
+        if !trimmed.contains("://") { trimmed = "https://" + trimmed }
         let shown = String(trimmed.prefix(80)).replacingOccurrences(of: "[^A-Za-z0-9.:/-]", with: "?", options: .regularExpression)
         guard let url = URL(string: trimmed), url.scheme == "https", let host = url.host?.lowercased(),
               Self.isSamsungHost(host),
