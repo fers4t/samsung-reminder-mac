@@ -217,6 +217,12 @@ struct QuickAddBar: View {
         .overlay(alignment: .top) { Divider() }
         .animation(.snappy(duration: 0.15), value: entry.chips)
         .onChange(of: text) { _, new in if new.isEmpty { ignored = [] } }
+        .onChange(of: model.typeAhead) { _, typed in
+            guard !typed.isEmpty else { return }
+            text += typed
+            model.typeAhead = ""
+            focused = true
+        }
         .onAppear { focused = true }
     }
 
