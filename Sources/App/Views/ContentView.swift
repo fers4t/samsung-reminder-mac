@@ -53,12 +53,35 @@ struct Sidebar: View {
                         Image(systemName: "circle.fill").foregroundStyle(ListColor.color(category.color))
                     }
                     .tag(AppModel.Filter.category(category.id))
+                    .contextMenu {
+                        Button("Edit List…") { editing = category }
+                        Button("Delete List…", role: .destructive) { deleting = category }
+                    }
                 }
             }
         }
         .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 180, ideal: 220)
+        .safeAreaInset(edge: .bottom) {
+            Button { creating = true } label: { Label("New List", systemImage: "plus.circle") }
+                .buttonStyle(.plain).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .disabled(!model.isConnected)
+        }
+        .sheet(isPresented: $creating) { ListSheet(existing: nil) }
+        .sheet(item: $editing) { ListSheet(existing: $0) }
+        .confirmationDialog("Delete “\(deleting?.name ?? "")”?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
+            Button("Delete List", role: .destructive) {
+                if let deleting { Task { await model.deleteCategory(deleting.id) } }
+                deleting = nil
+            }
+        } message: {
+            Text("Its reminders move to My reminders. This happens in Samsung Cloud on every device.")
+        }
     }
+
+    @State private var creating = false
+    @State private var editing: ReminderCategory?
+    @State private var deleting: ReminderCategory?
 }
 
 struct ReminderList: View {
@@ -135,7 +158,7 @@ struct ReminderRow: View {
                     .strikethrough(reminder.completed)
                     .foregroundStyle(reminder.completed ? .secondary : .primary)
                     .lineLimit(2)
-                if !reminder.text.isEmpty {
+                if !reminder.text.isEmpty, reminder.text != reminder.title {
                     Text(reminder.text).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 }
                 HStack(spacing: 6) {
@@ -175,43 +198,57 @@ struct DueLabel: View {
 struct ReminderDetail: View {
     @Environment(AppModel.self) private var model
     let reminder: Reminder
+    @State private var draft: ReminderDraft
+    @State private var busy = false
+
+    init(reminder: Reminder) {
+        self.reminder = reminder
+        _draft = State(initialValue: ReminderDraft(reminder: reminder))
+    }
+
+    private var dirty: Bool { draft != ReminderDraft(reminder: reminder) }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(reminder.title.isEmpty ? "Untitled" : reminder.title)
-                    .font(.title2.weight(.semibold))
-                    .textSelection(.enabled)
-                if !reminder.text.isEmpty {
-                    Text(reminder.text).textSelection(.enabled)
+        VStack(spacing: 0) {
+            ReminderEditor(draft: $draft)
+            VStack(alignment: .leading, spacing: 6) {
+                if reminder.attachmentCount > 0 {
+                    Label("\(reminder.attachmentCount) photo attachment(s) — viewable on the phone only", systemImage: "photo")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                if !reminder.checklist.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(reminder.checklist.enumerated()), id: \.offset) { _, item in
-                            Label(item.text, systemImage: item.done ? "checkmark.square" : "square")
-                                .foregroundStyle(item.done ? .secondary : .primary)
-                        }
-                    }
+                if let url = reminder.url.flatMap(URL.init(string:)), ["http", "https"].contains(url.scheme ?? "") {
+                    Link(reminder.webTitle ?? url.absoluteString, destination: url).font(.caption).lineLimit(1)
                 }
-                Divider()
-                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                    GridRow { Text("List").foregroundStyle(.secondary); Text(model.categoryName(reminder.categoryID)) }
-                    if let due = reminder.dueAt {
-                        GridRow { Text("Due").foregroundStyle(.secondary); DueLabel(date: due, allDay: reminder.allDay, overdue: false).font(.body) }
-                    }
-                    if let address = reminder.locationAddress, !address.isEmpty {
-                        GridRow { Text("Place").foregroundStyle(.secondary); Text(address) }
-                    }
-                    GridRow { Text("Modified").foregroundStyle(.secondary); Text(reminder.modifiedAt, format: .dateTime) }
-                }
-                .font(.callout)
                 HStack {
+                    Text("Modified \(reminder.modifiedAt, format: .dateTime)").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
                     Button(reminder.completed ? "Mark Incomplete" : "Mark Complete") { model.toggleCompleted(reminder) }
-                    Button(reminder.favorite ? "Unfavorite" : "Favorite") { model.toggleFavorite(reminder) }
+                    Button("Revert") { draft = ReminderDraft(reminder: reminder) }.disabled(!dirty)
+                    Button("Save") { save() }
+                        .keyboardShortcut("s")
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!dirty || busy || draft.title.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+        }
+        // A background sync may replace the reminder; keep local edits unless the user has none.
+        .onChange(of: reminder) { _, updated in if !dirty { draft = ReminderDraft(reminder: updated) } }
+        .onChange(of: draft.checklist.map(\.done)) { old, new in
+            // Checking an item off is the everyday action; save it right away when nothing else is pending.
+            guard old.count == new.count, old != new else { return }
+            var quick = ReminderDraft(reminder: reminder)
+            guard quick.checklist.count == new.count else { return }
+            for (index, done) in new.enumerated() { quick.checklist[index].done = done }
+            if draft == quick { save() }
+        }
+    }
+
+    private func save() {
+        busy = true
+        Task {
+            _ = await model.update(reminder.id, draft)
+            busy = false
         }
     }
 }

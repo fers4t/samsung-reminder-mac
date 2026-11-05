@@ -182,12 +182,36 @@ final class AppModel {
         mutate { try await $0.setFavorite(reminder.id, !reminder.favorite) }
     }
 
-    func create(_ input: ReminderService.NewReminder) async -> Bool {
+    func create(_ draft: ReminderDraft) async -> Bool {
+        await run { service in
+            let created = try await service.create(draft)
+            self.selectedReminderID = created.id
+        }
+    }
+
+    func update(_ id: String, _ draft: ReminderDraft) async -> Bool {
+        await run { _ = try await $0.update(id, draft) }
+    }
+
+    func createCategory(name: String, color: Int) async -> Bool {
+        await run { let category = try await $0.createCategory(name: name, color: color); self.filter = .category(category.id) }
+    }
+
+    func updateCategory(_ id: String, name: String, color: Int) async -> Bool {
+        await run { _ = try await $0.updateCategory(id, name: name, color: color) }
+    }
+
+    func deleteCategory(_ id: String) async -> Bool {
+        await run { try await $0.deleteCategory(id, confirmID: id); if self.filter == .category(id) { self.filter = .all } }
+    }
+
+    /// Runs one cloud mutation, then refreshes snapshot, widget and notifications.
+    @discardableResult
+    private func run(_ operation: (ReminderService) async throws -> Void) async -> Bool {
         guard let service else { return false }
         do {
-            let created = try await service.create(input)
+            try await operation(service)
             snapshot = await service.snapshot
-            selectedReminderID = created.id
             lastError = nil
             WidgetCenter.shared.reloadAllTimelines()
             await rescheduleNotifications()

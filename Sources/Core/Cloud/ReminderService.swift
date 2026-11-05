@@ -131,6 +131,7 @@ public actor ReminderService {
             let categoryIDs = try await client.list(table: SamsungCloudClient.categoryTable, limit: 100).records.map(\.id)
             let categories = try await client.get(table: SamsungCloudClient.categoryTable, ids: categoryIDs)
                 .map(ReminderCategory.init(record:))
+                .filter { $0.id != defaultCategoryID }
                 .sorted { ($0.order, $0.name) < ($1.order, $1.name) }
 
             let reminders = rawReminders.values.map(Reminder.init(record:)).sorted { $0.modifiedAt > $1.modifiedAt }
@@ -156,28 +157,16 @@ public actor ReminderService {
 
     // MARK: Mutations
 
-    public struct NewReminder: Sendable {
-        public var title: String
-        public var text: String
-        public var dueAt: Date?
-        public var categoryID: String
-        public init(title: String, text: String = "", dueAt: Date? = nil, categoryID: String = defaultCategoryID) {
-            self.title = title; self.text = text; self.dueAt = dueAt; self.categoryID = categoryID
-        }
+    public func create(_ draft: ReminderDraft) async throws -> Reminder {
+        let valid = try draft.validated()
+        var record = Self.blankRecord()
+        valid.apply(to: &record)
+        return try await upload(record)
     }
 
-    static let maxTitleLength = 500
-    static let maxTextLength = 20_000
-
-    public func create(_ input: NewReminder) async throws -> Reminder {
-        let title = input.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { throw CloudError.invalidInput("A title is required.") }
-        guard title.count <= Self.maxTitleLength, input.text.count <= Self.maxTextLength else {
-            throw CloudError.invalidInput("The reminder is too long.")
-        }
-        var record = Self.blankRecord(title: title, text: input.text, categoryID: input.categoryID)
-        if let due = input.dueAt { Self.applyTimedSchedule(&record, due: due) }
-        return try await upload(record)
+    public func update(_ id: String, _ draft: ReminderDraft) async throws -> Reminder {
+        let valid = try draft.validated()
+        return try await modify(id) { valid.apply(to: &$0) }
     }
 
     public func setCompleted(_ id: String, _ completed: Bool) async throws -> Reminder {
@@ -232,15 +221,14 @@ public actor ReminderService {
 
     // MARK: Record construction (mirrors the mobile data model)
 
-    static func blankRecord(title: String, text: String, categoryID: String) -> [String: JSONValue] {
+    static func blankRecord() -> [String: JSONValue] {
         let now = JSONValue(SamsungCloudClient.nowMillis())
         var record: [String: JSONValue] = [
             "record_id": .string(UUID().uuidString.lowercased()), "mod_timestamp": now, "event_type": JSONValue(0),
-            "item_status": JSONValue(1), "item_color": JSONValue(0), "title": .string(title), "time_create": now,
+            "item_status": JSONValue(1), "item_color": JSONValue(0), "title": .string(""), "time_create": now,
             "last_modified_time": now, "root_reminder_record_id": .null,
-            "category_id": .string(categoryID), "favorite": JSONValue(0), "weight": now,
-            "text": .string(ReminderContent.xml(text: text, checklist: [])),
-            "plainText": .string(ReminderContent.plainText(text: text, checklist: [])),
+            "category_id": .string(defaultCategoryID), "favorite": JSONValue(0), "weight": now,
+            "text": .string(ReminderContent.xml(text: "", checklist: [])), "plainText": .string(""),
             "utterance": .string(""), "has_checkbox": JSONValue(0), "has_attached_file": JSONValue(0),
         ]
         let nullKeys = [
@@ -262,18 +250,55 @@ public actor ReminderService {
         return record
     }
 
-    /// One-shot timed alarm, exactly as the phone writes it (event_type 1).
-    static func applyTimedSchedule(_ record: inout [String: JSONValue], due: Date) {
-        let millis = Int64(due.timeIntervalSince1970 * 1000)
-        record["alarm_reminde_time"] = JSONValue(millis)
-        record["alarm_repeat_type"] = JSONValue(0)
-        record["alarm_repeat_weekdays"] = JSONValue(0)
-        record["alarm_tpo_type"] = JSONValue(0)
-        record["time_dismissed"] = JSONValue(0)
-        record["event_type"] = JSONValue(1)
-        record["event_status"] = JSONValue(millis > SamsungCloudClient.nowMillis() ? 1 : 3)
-        record["start_time"] = .null
-        record["end_time"] = .null
-        record["all_day"] = .null
+    // MARK: Lists (categories)
+
+    public func createCategory(name: String, color: Int) async throws -> ReminderCategory {
+        let name = try Self.validCategoryName(name)
+        let record: [String: JSONValue] = [
+            "record_id": .string(UUID().uuidString.lowercased()), "mod_timestamp": JSONValue(SamsungCloudClient.nowMillis()),
+            "name": .string(name), "color": JSONValue(min(max(color, 0), 7)), "icon_index": JSONValue(1),
+            "order": JSONValue(snapshot.categories.count), "extensionInfo": .null,
+        ]
+        return try await uploadCategory(record)
+    }
+
+    public func updateCategory(_ id: String, name: String, color: Int) async throws -> ReminderCategory {
+        guard id != defaultCategoryID else { throw CloudError.invalidInput("My reminders is Samsung's protected default list.") }
+        let name = try Self.validCategoryName(name)
+        guard var record = try await authorized({ try await $0.getOne(table: SamsungCloudClient.categoryTable, id: id) })
+        else { throw CloudError.notFound }
+        record["name"] = .string(name)
+        record["color"] = JSONValue(min(max(color, 0), 7))
+        record["mod_timestamp"] = JSONValue(SamsungCloudClient.nowMillis())
+        return try await uploadCategory(record)
+    }
+
+    /// Moves the list's reminders to My reminders first, as the phone does, then deletes the list.
+    public func deleteCategory(_ id: String, confirmID: String) async throws {
+        guard id == confirmID, !id.isEmpty, id != defaultCategoryID else { throw CloudError.invalidInput("Delete confirmation did not match.") }
+        for reminder in snapshot.reminders where reminder.categoryID == id {
+            _ = try await modify(reminder.id) { $0["category_id"] = .string(defaultCategoryID) }
+        }
+        try await authorized { try await $0.delete(table: SamsungCloudClient.categoryTable, id: id) }
+        snapshot.categories.removeAll { $0.id == id }
+        try store.save(snapshot)
+    }
+
+    static func validCategoryName(_ name: String) throws -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 100 else { throw CloudError.invalidInput("A list name of up to 100 characters is required.") }
+        return trimmed
+    }
+
+    private func uploadCategory(_ record: [String: JSONValue]) async throws -> ReminderCategory {
+        try await authorized { try await $0.upload(table: SamsungCloudClient.categoryTable, record: record) }
+        let category = ReminderCategory(record: record)
+        if let index = snapshot.categories.firstIndex(where: { $0.id == category.id }) {
+            snapshot.categories[index] = category
+        } else {
+            snapshot.categories.append(category)
+        }
+        try store.save(snapshot)
+        return category
     }
 }

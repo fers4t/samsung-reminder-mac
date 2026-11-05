@@ -9,7 +9,9 @@ It reads and writes your reminders directly in Samsung Cloud, the same record st
 ## Features
 
 - Lists, Today / Upcoming / Favorites / Completed views, search
-- Complete, favorite, create (with a due time) and delete reminders; changes appear on your phone
+- Full editing: title, notes, checklists, lists, importance, timed or all-day schedules, repeat rules, early reminders,
+  alert strength, place triggers (arrive/leave, address search via MapKit); create, edit and delete lists
+- Photo attachments are shown as a count only (Samsung's file storage protocol is not implemented)
 - Menu bar panel with the next reminders
 - WidgetKit widget (small / medium / large) that deep-links into the app
 - Local notifications when a reminder is due

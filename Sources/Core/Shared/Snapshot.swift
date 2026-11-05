@@ -3,7 +3,7 @@ import Foundation
 /// Everything the UI and the widget need, written by the app after each sync.
 /// Contains no credential. The widget only ever reads this file.
 public struct ReminderSnapshot: Codable, Sendable, Equatable {
-    public static let formatVersion = 1
+    public static let formatVersion = 2
 
     public var version: Int = ReminderSnapshot.formatVersion
     public var syncedAt: Date

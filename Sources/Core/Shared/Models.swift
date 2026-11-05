@@ -14,9 +14,14 @@ public struct Reminder: Identifiable, Hashable, Codable, Sendable {
     public var allDay: Bool
     /// Fire time for timed reminders, or the day start for all-day reminders.
     public var dueAt: Date?
-    public var hasLocation: Bool
-    public var locationAddress: String?
-    public var repeats: Bool
+    public var location: ReminderLocation?
+    public var repeatRule: RepeatRule?
+    public var earlyAlert: EarlyAlert?
+    public var alertType: AlertType
+    /// Photo attachments exist in Samsung Cloud file storage; count only, not downloadable here.
+    public var attachmentCount: Int
+    public var url: String?
+    public var webTitle: String?
     public var modifiedAt: Date
     /// Samsung's cloud revision clock; needed verbatim to detect changes between syncs.
     public var modTimestamp: Int64
@@ -34,16 +39,20 @@ public struct Reminder: Identifiable, Hashable, Codable, Sendable {
             ? (record["start_time"]?.int ?? record["alarm_reminde_time"]?.int)
             : (record["alarm_reminde_time"]?.int ?? record["start_time"]?.int)
         dueAt = millis.flatMap(Reminder.date(fromMillis:))
-        hasLocation = (record["location_transition_type"]?.int ?? 0) > 0
-            || !(record["location_latitude"]?.isNull ?? true)
-            || !(record["location_address"]?.string?.isEmpty ?? true)
-        locationAddress = record["location_address"]?.string
-        let rrule = record["rrule"]?.string ?? record["date_rrule"]?.string
-        repeats = !(rrule?.isEmpty ?? true) || (record["alarm_repeat_type"]?.int ?? 0) > 0
+        location = ReminderLocation(record: record)
+        repeatRule = RepeatRule(record: record)
+        earlyAlert = EarlyAlert(record: record)
+        alertType = AlertType(rawValue: Int(record["alert_type"]?.int ?? 16)) ?? .medium
+        attachmentCount = (0..<8).filter { !(record["original_image_\($0)"]?.isNull ?? true) }.count
+        url = record["url"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+        webTitle = record["web_title"]?.string
         modTimestamp = record["mod_timestamp"]?.int ?? 0
         let modified = record["last_modified_time"]?.int ?? 0
         modifiedAt = Reminder.date(fromMillis: modified > 0 ? modified : modTimestamp) ?? .distantPast
     }
+
+    public var hasLocation: Bool { location != nil }
+    public var repeats: Bool { repeatRule != nil }
 
     static func date(fromMillis millis: Int64) -> Date? {
         millis > 0 ? Date(timeIntervalSince1970: TimeInterval(millis) / 1000) : nil

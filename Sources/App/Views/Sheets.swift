@@ -91,51 +91,86 @@ struct ConnectSheet: View {
 struct NewReminderSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @State private var title = ""
-    @State private var text = ""
-    @State private var hasDue = false
-    @State private var dueAt = Calendar.current.nextDate(after: Date(), matching: DateComponents(minute: 0), matchingPolicy: .nextTime) ?? Date()
-    @State private var categoryID = defaultCategoryID
+    @State private var draft = ReminderDraft()
     @State private var busy = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("New Reminder").font(.title2.weight(.semibold))
-            Form {
-                TextField("Title", text: $title)
-                TextField("Notes", text: $text, axis: .vertical).lineLimit(3...6)
-                Picker("List", selection: $categoryID) {
-                    Text("My reminders").tag(defaultCategoryID)
-                    ForEach(model.snapshot.categories) { Text($0.name).tag($0.id) }
-                }
-                Toggle("Remind me at", isOn: $hasDue)
-                if hasDue {
-                    DatePicker("Time", selection: $dueAt, displayedComponents: [.date, .hourAndMinute])
-                }
-            }
-            .textFieldStyle(.roundedBorder)
-            if let error = model.lastError { Text(error).font(.callout).foregroundStyle(.red) }
+        VStack(spacing: 0) {
+            Text("New Reminder").font(.title2.weight(.semibold)).padding(.top, 20)
+            ReminderEditor(draft: $draft)
+            if let error = model.lastError { Text(error).font(.callout).foregroundStyle(.red).padding(.horizontal) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Add") { add() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
-                    .disabled(busy || title.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(busy || draft.title.trimmingCharacters(in: .whitespaces).isEmpty)
             }
+            .padding(16)
         }
-        .padding(24)
-        .frame(width: 460)
+        .frame(width: 520, height: 640)
         .disabled(busy)
-        .onAppear {
-            if case .category(let id) = model.filter { categoryID = id }
-        }
+        .onAppear { if case .category(let id) = model.filter { draft.categoryID = id } }
     }
 
     private func add() {
         busy = true
         Task {
-            let ok = await model.create(.init(title: title, text: text, dueAt: hasDue ? dueAt : nil, categoryID: categoryID))
+            if await model.create(draft) { dismiss() }
+            busy = false
+        }
+    }
+}
+
+/// Create or rename a list and pick its colour.
+struct ListSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let existing: ReminderCategory?
+    @State private var name: String
+    @State private var color: Int
+    @State private var busy = false
+
+    init(existing: ReminderCategory?) {
+        self.existing = existing
+        _name = State(initialValue: existing?.name ?? "")
+        _color = State(initialValue: existing?.color ?? 0)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(existing == nil ? "New List" : "Edit List").font(.title2.weight(.semibold))
+            TextField("Name", text: $name).textFieldStyle(.roundedBorder)
+            HStack(spacing: 10) {
+                ForEach(0..<8, id: \.self) { index in
+                    Button { color = index } label: {
+                        Circle().fill(ListColor.color(index)).frame(width: 22, height: 22)
+                            .overlay(Circle().stroke(.primary, lineWidth: color == index ? 2 : 0))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Colour \(index)")
+                }
+            }
+            if let error = model.lastError { Text(error).font(.callout).foregroundStyle(.red) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(existing == nil ? "Create" : "Save") { save() }
+                    .keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+                    .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 380)
+        .disabled(busy)
+    }
+
+    private func save() {
+        busy = true
+        Task {
+            let ok = if let existing { await model.updateCategory(existing.id, name: name, color: color) }
+                     else { await model.createCategory(name: name, color: color) }
             busy = false
             if ok { dismiss() }
         }
