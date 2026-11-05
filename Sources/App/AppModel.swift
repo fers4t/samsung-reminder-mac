@@ -94,13 +94,16 @@ final class AppModel {
 
     /// Characters typed while nothing editable has focus; the quick-add field consumes them.
     var typeAhead = ""
-    private var keyMonitor: Any?
+    /// Set by the quick-add bar while it is on screen; nothing is captured without a consumer.
+    var quickAddVisible = false
+    // nonisolated(unsafe): only deinit reads it off the main actor, and the model lives for the whole app run.
+    nonisolated(unsafe) private var keyMonitor: Any?
 
     /// Routes stray typing in the main window into the quick-add field, like Spotlight does.
     private func installTypeAhead() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, Self.shouldCapture(event) else { return event }
+            guard let self, quickAddVisible, Self.shouldCapture(event) else { return event }
             typeAhead += event.characters ?? ""
             return nil
         }
@@ -108,9 +111,9 @@ final class AppModel {
 
     /// Only plain printable keys, only in a titled main window with no sheet, only when no text field is editing.
     static func shouldCapture(_ event: NSEvent) -> Bool {
-        guard let window = NSApp.keyWindow, window.styleMask.contains(.titled), !(window is NSPanel),
+        guard let window = NSApp.keyWindow, window.identifier?.rawValue.hasPrefix("main") == true,
               window.attachedSheet == nil, window.sheetParent == nil,
-              !(window.firstResponder is NSTextView),
+              !(window.firstResponder is NSTextView), !(window.firstResponder is NSDatePicker),
               event.modifierFlags.intersection([.command, .control, .option, .function]).isEmpty,
               let characters = event.characters, let first = characters.first,
               !first.isWhitespace, !first.isNewline, first.isLetter || first.isNumber || first.isPunctuation || first.isSymbol

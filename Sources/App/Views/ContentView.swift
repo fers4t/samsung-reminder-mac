@@ -182,6 +182,7 @@ struct QuickAddBar: View {
     @State private var text = ""
     @State private var ignored: Set<QuickEntry.ChipKind> = []
     @FocusState private var focused: Bool
+    @State private var caretToEnd = false
 
     private var entry: QuickEntry {
         QuickEntryParser.parse(text, lists: model.snapshot.categories.map { .init(id: $0.id, name: $0.name) }, ignoring: ignored)
@@ -221,9 +222,17 @@ struct QuickAddBar: View {
             guard !typed.isEmpty else { return }
             text += typed
             model.typeAhead = ""
+            caretToEnd = true
             focused = true
         }
-        .onAppear { focused = true }
+        .onChange(of: focused) { _, isFocused in
+            guard isFocused, caretToEnd else { return }
+            caretToEnd = false
+            // Programmatic focus selects the whole field; keep typing after what was just typed.
+            DispatchQueue.main.async { (NSApp.keyWindow?.firstResponder as? NSTextView)?.moveToEndOfDocument(nil) }
+        }
+        .onAppear { focused = true; model.quickAddVisible = true }
+        .onDisappear { model.quickAddVisible = false }
     }
 
     private func add() {

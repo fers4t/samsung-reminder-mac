@@ -9,6 +9,7 @@ It reads and writes your reminders directly in Samsung Cloud, the same record st
 ## Features
 
 - Lists, Today / Upcoming / Favorites / Completed views, search
+- Type anywhere in the window to start a new reminder: stray keystrokes land in the quick-add field
 - Full editing: title, notes, checklists, lists, importance, timed or all-day schedules, repeat rules, early reminders,
   alert strength, place triggers (arrive/leave, address search via MapKit); create, edit and delete lists
 - Photo attachments are shown as a count only (Samsung's file storage protocol is not implemented)

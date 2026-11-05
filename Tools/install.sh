@@ -6,7 +6,9 @@ CONFIG="${1:-Release}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 [ -d SamsungReminder.xcodeproj ] || xcodegen generate
-xcodebuild -project SamsungReminder.xcodeproj -scheme SamsungReminder -configuration "$CONFIG" build | grep -E "error:|BUILD" || true
+LOG="$(mktemp)"
+xcodebuild -project SamsungReminder.xcodeproj -scheme SamsungReminder -configuration "$CONFIG" build >"$LOG" 2>&1 || { grep -E "error:|BUILD" "$LOG" >&2; rm -f "$LOG"; exit 1; }
+rm -f "$LOG"
 APP="$(xcodebuild -project SamsungReminder.xcodeproj -scheme SamsungReminder -configuration "$CONFIG" -showBuildSettings 2>/dev/null \
   | awk -F' = ' '/ BUILT_PRODUCTS_DIR /{print $2}' | head -1)/Samsung Reminder.app"
 [ -d "$APP" ] || { echo "build product not found: $APP" >&2; exit 1; }
