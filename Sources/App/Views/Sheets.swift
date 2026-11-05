@@ -27,6 +27,9 @@ struct ConnectSheet: View {
             if let error = model.lastError {
                 Text(error).font(.callout).foregroundStyle(.red)
             }
+            Link("Where do I get these values?",
+                 destination: URL(string: "https://github.com/fers4t/samsung-reminder-mac#how-it-gets-your-data")!)
+                .font(.callout)
             HStack {
                 Button("Paste credential JSON") { pasteJSON() }
                 Spacer()

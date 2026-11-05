@@ -23,12 +23,25 @@ Samsung Cloud exposes a generic record store at `api.samsungcloud.com/data/v2/<t
 
 The Windows client obtains the access token from **Samsung Internet for Windows**: a signed Samsung extension exposes a
 private `chrome.credentials` API that mints the token for the signed-in Samsung Account. **That browser does not exist on macOS**,
-so this app cannot mint a token itself. Instead you provide the credential once and it is kept in your Keychain:
+so this app cannot mint a token itself. Instead you provide the credential once and it is kept in your Keychain.
 
-1. On a Windows machine with Samsung Internet signed in, run the reference Windows client once. It stores the credential in
-   Windows Credential Manager under `SamsungReminderDesktop.SamsungCloud` as JSON `{"accessToken","userId","deviceId"}`.
-   Export it with a credential tool of your choice and paste the JSON into **Connect → Paste credential JSON**.
-2. Or paste the three values manually if you captured them another way.
+On a Windows PC with Samsung Internet installed and signed in to your Samsung Account:
+
+1. Open `chrome-extension://bhbojgnklikmfoopegjhgfbklnpbjboa/src/index.html` in a Samsung Internet tab (Samsung's signed Calendar extension).
+2. Press F12, and in the Console run:
+
+   ```js
+   chrome.credentials.getAccessToken({provider:'samsung'}, t =>
+     chrome.credentials.getAccountInfo({provider:'samsung'}, a =>
+       console.log(JSON.stringify({accessToken:t, userId:a.identifiers.userId,
+         deviceId:crypto.randomUUID(), accountEmail:a.identifiers.loginId}))))
+   ```
+
+3. Copy the printed JSON and use **Connect → Paste credential JSON** on the Mac.
+
+Alternatively, run the reference Windows client once: it stores the same JSON in Windows Credential Manager under
+`SamsungReminderDesktop.SamsungCloud`. The console recipe has not been verified by the maintainers on Windows; the
+reference client issues the same calls through the DevTools protocol, so the extension page's own console is expected to work.
 
 When Samsung expires the token the app returns to the connect screen; nothing else is stored.
 Contributions that add a native macOS token source (e.g. a Samsung Account sign-in flow) are welcome, see `ReminderService.connect`.

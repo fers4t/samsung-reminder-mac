@@ -73,18 +73,17 @@ public actor ReminderService {
 
     private func performSync() async throws -> ReminderSnapshot {
         try await authorized { client in
+            let syncStart = SamsungCloudClient.nowMillis()
             let listing = try await client.list(table: SamsungCloudClient.reminderTable)
             let changed = listing.records
                 .filter { rawReminders[$0.id]?["mod_timestamp"]?.int != $0.modTimestamp }
                 .map(\.id)
             let fetched = try await client.get(table: SamsungCloudClient.reminderTable, ids: changed)
             try Task.checkCancellation()
-
-            let liveIDs = Set(listing.records.map(\.id))
-            rawReminders = rawReminders.filter { liveIDs.contains($0.key) }
-            for record in fetched {
-                if let id = record["record_id"]?.string { rawReminders[id] = record }
-            }
+            // The actor is re-entrant across those awaits: a local edit or create may
+            // have landed meanwhile, so merge instead of overwriting.
+            rawReminders = Self.merge(local: rawReminders, fetched: fetched,
+                                      liveIDs: Set(listing.records.map(\.id)), syncStart: syncStart)
 
             // Categories are few; a full re-read is cheaper than tracking them.
             let categoryIDs = try await client.list(table: SamsungCloudClient.categoryTable, limit: 100).records.map(\.id)
@@ -98,6 +97,19 @@ public actor ReminderService {
             snapshot = result
             return result
         }
+    }
+
+    /// Keeps the newer of local vs fetched per id; drops ids Samsung no longer
+    /// lists unless they were written locally after the listing started.
+    static func merge(local: [String: [String: JSONValue]], fetched: [[String: JSONValue]],
+                      liveIDs: Set<String>, syncStart: Int64) -> [String: [String: JSONValue]] {
+        var result = local.filter { liveIDs.contains($0.key) || ($0.value["mod_timestamp"]?.int ?? 0) >= syncStart }
+        for record in fetched {
+            guard let id = record["record_id"]?.string else { continue }
+            let localTS = result[id]?["mod_timestamp"]?.int ?? -1
+            if (record["mod_timestamp"]?.int ?? 0) >= localTS { result[id] = record }
+        }
+        return result
     }
 
     // MARK: Mutations

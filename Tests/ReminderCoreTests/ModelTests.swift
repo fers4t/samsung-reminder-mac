@@ -53,4 +53,16 @@ final class ModelTests: XCTestCase {
         let data = try JSONEncoder().encode(JSONValue.object(["n": record["event_type"]!]))
         XCTAssertEqual(String(decoding: data, as: UTF8.self), "{\"n\":1}")
     }
+
+    func testMergeKeepsLocalEditsAndCreatesMadeDuringSync() {
+        func rec(_ id: String, _ ts: Int64) -> [String: JSONValue] { ["record_id": .string(id), "mod_timestamp": JSONValue(ts)] }
+        let local = ["edited": rec("edited", 200), "stale": rec("stale", 50), "deleted": rec("deleted", 10), "created": rec("created", 150)]
+        let fetched = [rec("edited", 100), rec("stale", 120), rec("new", 90)]
+        let merged = ReminderService.merge(local: local, fetched: fetched, liveIDs: ["edited", "stale", "new"], syncStart: 140)
+        XCTAssertEqual(merged["edited"]?["mod_timestamp"]?.int, 200, "local edit newer than fetched wins")
+        XCTAssertEqual(merged["stale"]?["mod_timestamp"]?.int, 120, "fetched newer record replaces cache")
+        XCTAssertEqual(merged["new"]?["mod_timestamp"]?.int, 90)
+        XCTAssertNotNil(merged["created"], "created after listing started must survive")
+        XCTAssertNil(merged["deleted"], "unlisted and old is gone")
+    }
 }

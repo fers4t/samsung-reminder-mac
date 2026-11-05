@@ -1,0 +1,16 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build-test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: xcodegen generate
+      - name: Build and test (unsigned; App Groups need a team locally)
+        run: xcodebuild -scheme SamsungReminder -configuration Debug test CODE_SIGNING_ALLOWED=NO | xcpretty || xcodebuild -scheme SamsungReminder -configuration Debug test CODE_SIGNING_ALLOWED=NO
