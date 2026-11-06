@@ -59,6 +59,19 @@ Sync cost per refresh: one listing request (`record_id,mod_timestamp` for up to 
 `/get` requests for records whose `mod_timestamp` differs from the cache, plus two small requests for lists.
 Memory: the raw records of one page (≤ 500) are kept in the service actor so edits can round-trip every field without a re-fetch.
 
+## Install a release
+
+Download `Samsung-Reminder-<version>.zip` from [Releases](https://github.com/fers4t/samsung-reminder-mac/releases),
+unzip and move the app to `/Applications`. The build is ad-hoc signed (no Apple Developer ID), so on first launch
+macOS will refuse to open it: right-click the app, choose **Open**, then confirm, or run
+
+```sh
+xattr -d com.apple.quarantine "/Applications/Samsung Reminder.app"
+```
+
+The widget needs a developer-signed build to load; build from source with your own team if you want it.
+Release zips are produced by `Tools/release.sh`, which builds with the public identifiers only.
+
 ## Build
 
 Requirements: macOS 14+, Xcode 26, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
